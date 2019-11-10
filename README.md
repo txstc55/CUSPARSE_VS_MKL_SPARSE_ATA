@@ -8,4 +8,4 @@ For cuSPARSE, we will use [cusparseDcsrgemm](https://docs.nvidia.com/cuda/cuspar
 
 User has to supply three arguments: number of rows, number of columns and average number of non-zeros in matrix A. All matrices generated will be type of double.
 
-User has to link MKL and cuSPARSE library manually, this repo only provides the code.
+User has to link MKL and cuSPARSE library manually, this repo only provides the code. For best performance, please turn on the parallel flag for MKL.
