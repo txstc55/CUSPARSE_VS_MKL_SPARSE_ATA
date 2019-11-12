@@ -173,13 +173,85 @@ int main(int argc, char* argv[])
 	cudaMemcpy(h_csrValC, csrValC, nnzC * sizeof(double), cudaMemcpyDeviceToHost);
 	cudaCheckErrors("cudaMemcpy fail");
 
+
 	// reconstruct R1_cusparse using the main memory
 	auto R1_cusparse = ConstructSparseMatrix(m, k, nnzC, h_csrValC, h_csrRowPtrC, h_csrColIndC);
+
+
+
+
+
+	// ======================================================================================//
+	// Allocate dense A in column major                                                      //
+	// ======================================================================================//
+	Eigen::MatrixXd A_dense_matrix = Eigen::MatrixXd(A);
+	// std::cout << A_dense_matrix << "\n";
+	double* A_dense, *h_A_dense, *C_dense, *h_C_dense;
+	// for the dense matrix of A
+	h_A_dense = (double*)malloc(A_dense_matrix.rows() * A_dense_matrix.cols() * sizeof(double));
+	// for the result
+	h_C_dense = (double*)malloc(A_dense_matrix.rows() * A_dense_matrix.cols() * sizeof(double));
+
+	// append entries according to column order
+	unsigned int d_count = 0;
+	for (unsigned int i = 0; i < A_dense_matrix.cols(); i++) {
+		for (unsigned int j = 0; j < A_dense_matrix.rows(); j++) {
+			h_A_dense[d_count] = A_dense_matrix(j, i);
+			d_count++;
+		}
+	}
+
+	cudaMalloc(&A_dense, (A_dense_matrix.rows() * A_dense_matrix.cols()) * sizeof(double));
+	cudaMalloc((void**)&C_dense, (A_dense_matrix.cols() * A_dense_matrix.cols()) * sizeof(double));
+	cudaCheckErrors("cudaMalloc fail");
+	cudaMemcpy(A_dense, h_A_dense, (A_dense_matrix.rows() * A_dense_matrix.cols()) * sizeof(double), cudaMemcpyHostToDevice);
+	cudaCheckErrors("cudaMemcpy fail");
+	cudaMemset((void*)C_dense, 0, (A_dense_matrix.rows() * A_dense_matrix.cols()) * sizeof(double));
+	cudaCheckErrors("cudaMemset fail");
+
+	// ======================================================================================//
+	// perform csrmm2                                                                        //
+	// ======================================================================================//
+	const double lbd_bt = k;
+	const double ldc = m;
+	double alpha = 1.0;
+	double beta = 0.0;
+	elapsed = benchmarkTimer([&]() {
+		for (unsigned int i = 0; i < 100; i++) {
+			stat = cusparseDcsrmm2(hndl,
+				CUSPARSE_OPERATION_TRANSPOSE,
+				CUSPARSE_OPERATION_NON_TRANSPOSE,
+				m, n, k, nnzA, &alpha,
+				descrA, csrValA, csrRowPtrA, csrColIndA,
+				A_dense, lbd_bt,
+				&beta, C_dense, ldc);
+		}
+	});
+	std::cout << "CUSPARSE CSRMM SYRK: " << elapsed << " us\n";
+	CUSPARSE_CHECK(stat);
+
+
+	cudaMemcpy(h_C_dense, C_dense, m * n * sizeof(double), cudaMemcpyDeviceToHost);
+	cudaCheckErrors("cudaMemcpy fail");
+
+	d_count = 0;
+	Eigen::MatrixXd R2_cusparse(m, n);
+	for (unsigned int i = 0; i < m; i++) {
+		for (unsigned int j = 0; j < n; j++) {
+			R2_cusparse(i, j) = h_C_dense[d_count];
+			d_count++;
+		}
+	}
+
+
+
 	// std::cout << "Ground Truth: \n" << ATA << "\n\n";
 	// std::cout << "MKL Result: \n" << R1_mkl << "\n\n";
 	// std::cout << "CUSPARSE RESULT: \n" << R1_cusparse << "\n\n";
+	// std::cout << "CUSPARSE CSRMM2 RESULT: \n" << R2_cusparse << "\n\n";
 	std::cout << "Checking corretness of cusparse by checking the norm of difference (we assume the correctness of MKL SYPR already):\n";
 	std::cout << (ATA - R1_cusparse).norm() << "\n";
+	std::cout << (ATA - R2_cusparse).norm() << "\n";
 
     return 0;
 }
